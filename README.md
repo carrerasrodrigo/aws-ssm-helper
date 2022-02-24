@@ -55,3 +55,9 @@ AWS_SSM_WITH_DECRYPTION=1
 ```python
 pip install git+https://github.com/carrerasrodrigo/aws-ssm-helper.git#egg=ssm
 ```
+
+## Testing
+
+```python
+pytest tests
+```
