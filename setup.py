@@ -5,7 +5,7 @@ setuptools.setup(
     version="0.0.1",
     author='Rodrigo N. Carreras',
     author_email='rodrigo@comparaencasa.com',
-    packages=[''],
+    packages=['ssm'],
     include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
