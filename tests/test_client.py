@@ -138,3 +138,34 @@ class TestClient(unittest.TestCase):
             self.assertEqual(params['cache_file'], 'cache')
             self.assertTrue(params['ignore_load'])
             self.assertTrue(params['with_decryption'])
+
+    def test_environ_with_no_cache(self):
+        os.environ['AWS_SSM_REGION_NAME'] = 'region'
+        os.environ['AWS_SSM_APP_PATH'] = '/some/path/'
+        os.environ['AWS_SSM_CACHE_FILE'] = ''
+        os.environ['AWS_SSM_IGNORE_LOAD'] = '0'
+        os.environ['AWS_SSM_WITH_DECRYPTION'] = '1'
+
+        response = {
+            'Parameters': [
+                {'Name': '/some/path/x', 'Value': 'xvalue'}
+            ]
+        }
+
+        client = boto3.client('ssm')
+        stubber = Stubber(client)
+        params = {
+            'Path': ANY,
+            'Recursive': ANY,
+            'MaxResults': ANY,
+            'WithDecryption': ANY
+        }
+        stubber.add_response('get_parameters_by_path', response, params)
+
+        with patch('ssm.boto3') as m:
+            with stubber:
+                m.client.return_value = client
+                data = get_keys_env()
+                self.assertEqual(data['x'], 'xvalue')
+                self.assertEqual(len(data), 1)
+                self.assertFalse(os.path.exists('.cache'))

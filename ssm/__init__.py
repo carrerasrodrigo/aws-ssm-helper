@@ -4,6 +4,9 @@ import os
 import boto3
 
 
+CACHE_NULL_VALUE_PATH = [None, '']
+
+
 def _get_data(client, key_path, next_token, with_decryption=True):
     params = {
         'Path': key_path,
@@ -38,7 +41,7 @@ def get_keys(region_name, key_path, cache_file='/tmp/keys.json',
     if ignore_load:
         return {}
 
-    if cache_file is not None:
+    if cache_file not in CACHE_NULL_VALUE_PATH:
         cdata = _get_cache_data(cache_file)
         if cdata is not None:
             return cdata
@@ -66,7 +69,7 @@ def get_keys(region_name, key_path, cache_file='/tmp/keys.json',
         name = k['Name'][len(key_path):]
         keys[name] = k['Value']
 
-    if cache_file is not None:
+    if cache_file not in CACHE_NULL_VALUE_PATH:
         _build_cache_data(cache_file, keys)
     return keys
 

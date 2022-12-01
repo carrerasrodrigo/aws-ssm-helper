@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="ssm",
-    version="0.0.1",
+    version="0.0.2",
     author='Rodrigo N. Carreras',
     author_email='rodrigo@comparaencasa.com',
     packages=['ssm'],
