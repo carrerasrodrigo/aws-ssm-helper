@@ -56,6 +56,26 @@ AWS_SSM_WITH_DECRYPTION=1
 pip install git+https://github.com/carrerasrodrigo/aws-ssm-helper.git#egg=ssm
 ```
 
+## SSM helper scripts
+This is a list of scripts that helps to parse text and replace values with keys in ssm.
+
+### ssm_get_key
+Obtains a key from ssm and prints the value in the stdout.
+
+Use:
+```bash
+ssm_get_key -k key_name > my_key_file
+ssm_get_key -k key_name -k key_name2 -s " " > my_key_file
+```
+
+### ssm_replace_from_input
+It takes a text to replace (TR) and the name of a key (KEY). This script will replace TR with the value of KEY.
+
+Use:
+```bash
+cat text_file | ssm_replace_from_input -k key_name -r TEXT
+```
+
 ## Testing
 
 ```python
