@@ -37,7 +37,7 @@ def _build_cache_data(name, data):
 
 
 def get_keys(region_name, key_path, cache_file='/tmp/keys.json',
-        ignore_load=False, with_decryption=False):
+        ignore_load=False, with_decryption=False, fail_on_error=False):
     if ignore_load:
         return {}
 
@@ -53,7 +53,9 @@ def get_keys(region_name, key_path, cache_file='/tmp/keys.json',
     while True:
         try:
             response = _get_data(client, key_path, next_token, with_decryption)
-        except Exception:
+        except Exception as ex:
+            if fail_on_error:
+                raise ex
             return {}
 
         results += response['Parameters']
@@ -80,4 +82,5 @@ def get_keys_env():
         key_path=os.environ['AWS_SSM_APP_PATH'],
         cache_file=os.environ.get('AWS_SSM_CACHE_FILE', '/tmp/keys.json'),
         ignore_load=os.environ.get('AWS_SSM_IGNORE_LOAD') == '1',
-        with_decryption=os.environ.get('AWS_SSM_WITH_DECRYPTION') == '1')
+        with_decryption=os.environ.get('AWS_SSM_WITH_DECRYPTION') == '1',
+        fail_on_error=os.environ.get('AWS_SSM_FAIL_ON_ERROR') == '1')

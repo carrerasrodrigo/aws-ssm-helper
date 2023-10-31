@@ -129,6 +129,7 @@ class TestClient(unittest.TestCase):
         os.environ['AWS_SSM_CACHE_FILE'] = 'cache'
         os.environ['AWS_SSM_IGNORE_LOAD'] = '1'
         os.environ['AWS_SSM_WITH_DECRYPTION'] = '1'
+        os.environ['AWS_SSM_FAIL_ON_ERROR'] = '1'
 
         with patch('ssm.get_keys') as fn:
             get_keys_env()
@@ -138,6 +139,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(params['cache_file'], 'cache')
             self.assertTrue(params['ignore_load'])
             self.assertTrue(params['with_decryption'])
+            self.assertTrue(params['fail_on_error'])
 
     def test_environ_with_no_cache(self):
         os.environ['AWS_SSM_REGION_NAME'] = 'region'
