@@ -30,6 +30,7 @@ This method will return parameters from ssm.
 - `ignore_load` indicated to ignore the loading of the parameters and return an empty dict.
 - `with_decryption` indicated if the parameters that we want to retrieve are encrypted.
 - `fail_on_error` in case there is an error getting the credentials it will be raised.
+- `encryption_key` optional key to encrypt cached data on disk. If not provided, uses `AWS_SSM_ENCRYPTION_KEY` environment variable.
 
 ### `get_keys_env`
 This method will return the same information that `get_keys` but instead of asking for arguments it will obtain the information from the environment variables. In order to use it you have to define the following variables.
@@ -42,6 +43,7 @@ AWS_SSM_CACHE_FILE
 AWS_SSM_IGNORE_LOAD # default 0
 AWS_SSM_WITH_DECRYPTION # default 0
 AWS_SSM_FAIL_ON_ERROR # default 0
+AWS_SSM_ENCRYPTION_KEY # optional key for encrypting cached data
 ```
 for example
 ```
