@@ -6,7 +6,7 @@ os.chdir(os.path.normpath(os.path.join(os.path.abspath(__file__), os.pardir)))
 
 setuptools.setup(
     name="ssm",
-    version="0.1.0",
+    version="0.2.0",
     author="Rodrigo N. Carreras",
     author_email="rodrigo@comparaencasa.com",
     packages=["ssm"],
