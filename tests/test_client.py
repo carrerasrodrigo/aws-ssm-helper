@@ -151,6 +151,11 @@ class TestClient(unittest.TestCase):
             self.assertTrue(params["fail_on_error"])
 
     def test_environ_with_no_cache(self):
+        """
+        Verify that get_keys_env loads parameters from AWS SSM using environment variables and does not create a cache file when AWS_SSM_CACHE_FILE is empty.
+        
+        Sets relevant AWS_SSM_* environment variables, stubs an SSM get_parameters_by_path response, and asserts that the returned key-value mapping contains the expected entry and that no cache files are created when the cache-file environment variable is an empty string.
+        """
         os.environ["AWS_SSM_REGION_NAME"] = "region"
         os.environ["AWS_SSM_APP_PATH"] = "/some/path/"
         os.environ["AWS_SSM_CACHE_FILE"] = ""
