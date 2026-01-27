@@ -16,6 +16,11 @@ except ImportError:
 
 CACHE_NULL_VALUE_PATH = [None, ""]
 
+# Parameter discovery methods
+KEY_DISCOVERY_BYPATH = "bypath"
+KEY_DISCOVERY_BYDESCRIBE = "bydescribe"
+VALID_KEY_DISCOVERY_METHODS = {KEY_DISCOVERY_BYPATH, KEY_DISCOVERY_BYDESCRIBE}
+
 
 def _get_kms_client(region_name):
     """
@@ -201,30 +206,119 @@ def _decrypt_data(
         raise ValueError("Invalid encryption key, cant read cache file")
 
 
-def _get_data(client, key_path, next_token, with_decryption=True):
+def _get_parameter_names_by_describe(client, key_path):
+    """
+    Get parameter names using describe-parameters API.
+
+    This method is useful when get_parameters_by_path doesn't support IAM tag-based filtering.
+    Uses describe_parameters with a Name filter to find parameters by path prefix.
+
+    Parameters:
+        client: SSM client instance.
+        key_path (str): The SSM parameter path prefix to query.
+
+    Returns:
+        list: List of parameter names matching the path prefix.
+    """
+    parameter_names = []
+    next_token = None
+
+    while True:
+        params = {
+            "ParameterFilters": [
+                {
+                    "Key": "Name",
+                    "Option": "BeginsWith",
+                    "Values": [key_path],
+                }
+            ],
+            "MaxResults": 10,
+        }
+
+        if next_token is not None:
+            params["NextToken"] = next_token
+
+        response = client.describe_parameters(**params)
+        parameter_names.extend(
+            [param["Name"] for param in response.get("Parameters", [])]
+        )
+
+        next_token = response.get("NextToken")
+        if next_token is None:
+            break
+
+    return parameter_names
+
+
+def _get_parameters_by_names(client, parameter_names, with_decryption=True):
+    """
+    Get parameter values for a list of parameter names.
+
+    Uses get_parameters API to fetch actual values. Handles pagination and returns
+    results in the same format as get_parameters_by_path for consistency.
+
+    Parameters:
+        client: SSM client instance.
+        parameter_names (list): List of parameter names to retrieve.
+        with_decryption (bool): Whether to decrypt SecureString parameters.
+
+    Returns:
+        dict: Response with "Parameters" key containing parameter details.
+    """
+    all_parameters = []
+    # get_parameters supports up to 10 parameters per call
+    batch_size = 10
+
+    for i in range(0, len(parameter_names), batch_size):
+        batch = parameter_names[i : i + batch_size]
+        response = client.get_parameters(Names=batch, WithDecryption=with_decryption)
+        all_parameters.extend(response.get("Parameters", []))
+
+    return {"Parameters": all_parameters}
+
+
+def _get_data(
+    client,
+    key_path,
+    next_token,
+    with_decryption=True,
+    discovery_method=KEY_DISCOVERY_BYPATH,
+):
     """
     Request parameters under the specified SSM path using the provided client.
 
+    Supports two discovery methods:
+    - "bypath": Uses get_parameters_by_path (faster but requires path permissions)
+    - "bydescribe": Uses describe_parameters + get_parameters (supports tag-based IAM filtering)
+
     Parameters:
+        client: SSM client instance.
         key_path (str): The SSM parameter path to query.
         next_token (str | None): Pagination token from a previous response; included when provided.
         with_decryption (bool): Whether to request decrypted parameter values.
+        discovery_method (str): Method to discover parameters ("bypath" or "bydescribe").
 
     Returns:
-        dict: The response dictionary returned by the client's get_parameters_by_path call.
+        dict: The response dictionary with "Parameters" key.
     """
-    params = {
-        "Path": key_path,
-        "Recursive": True,
-        "MaxResults": 10,
-        "WithDecryption": with_decryption,
-    }
+    if discovery_method == KEY_DISCOVERY_BYDESCRIBE:
+        # Use describe_parameters + get_parameters
+        parameter_names = _get_parameter_names_by_describe(client, key_path)
+        return _get_parameters_by_names(client, parameter_names, with_decryption)
+    else:
+        # Use get_parameters_by_path
+        params = {
+            "Path": key_path,
+            "Recursive": True,
+            "MaxResults": 10,
+            "WithDecryption": with_decryption,
+        }
 
-    if next_token is not None:
-        params["NextToken"] = next_token
+        if next_token is not None:
+            params["NextToken"] = next_token
 
-    response = client.get_parameters_by_path(**params)
-    return response
+        response = client.get_parameters_by_path(**params)
+        return response
 
 
 def _get_cache_data(
@@ -297,6 +391,7 @@ def get_keys(
     encryption_key=None,
     kms_key_id=None,
     kms_region_name=None,
+    key_discovery=None,
 ):
     """
     Retrieve parameter values from AWS SSM Parameter Store under a given path, optionally caching the results to a local file with optional encryption.
@@ -311,10 +406,23 @@ def get_keys(
         encryption_key (str | None): Optional passphrase used to encrypt/decrypt the cache file; if None or empty, cache is stored as plain JSON.
         kms_key_id (str | None): Optional KMS key ID or ARN for cache encryption; takes precedence over encryption_key.
         kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
+        key_discovery (str): Method to discover parameters ("bypath" for get_parameters_by_path, "bydescribe" for describe_parameters + get_parameters).
 
     Returns:
         dict: Mapping of parameter names (original name with key_path prefix removed) to their string values.
+
+    Raises:
+        ValueError: If key_discovery is not a valid method.
     """
+    if key_discovery is None:
+        key_discovery = KEY_DISCOVERY_BYPATH
+
+    if key_discovery not in VALID_KEY_DISCOVERY_METHODS:
+        raise ValueError(
+            f"Invalid key discovery method: '{key_discovery}'. "
+            f"Valid methods are: {', '.join(sorted(VALID_KEY_DISCOVERY_METHODS))}"
+        )
+
     if ignore_load:
         return {}
 
@@ -331,7 +439,9 @@ def get_keys(
 
     while True:
         try:
-            response = _get_data(client, key_path, next_token, with_decryption)
+            response = _get_data(
+                client, key_path, next_token, with_decryption, key_discovery
+            )
         except Exception as ex:
             if fail_on_error:
                 raise ex
@@ -371,6 +481,7 @@ def get_keys_env():
     - AWS_SSM_ENCRYPTION_KEY: optional key used to encrypt/decrypt the local cache.
     - AWS_SSM_ENCRYPTION_KMS_KEY: optional KMS key ID or ARN for cache encryption (supersedes AWS_SSM_ENCRYPTION_KEY).
     - AWS_SSM_ENCRYPTION_KMS_REGION: optional AWS region for KMS operations; if not provided, uses AWS_SSM_REGION_NAME.
+    - AWS_SSM_KEY_DISCOVERY: parameter discovery method ("bypath" for get_parameters_by_path or "bydescribe" for describe_parameters).
 
     Returns:
         dict: Mapping of parameter names (with the configured path prefix removed) to their values.
@@ -385,4 +496,5 @@ def get_keys_env():
         encryption_key=os.environ.get("AWS_SSM_ENCRYPTION_KEY"),
         kms_key_id=os.environ.get("AWS_SSM_ENCRYPTION_KMS_KEY"),
         kms_region_name=os.environ.get("AWS_SSM_ENCRYPTION_KMS_REGION"),
+        key_discovery=os.environ.get("AWS_SSM_KEY_DISCOVERY", KEY_DISCOVERY_BYPATH),
     )

@@ -11,7 +11,10 @@ from ssm import (
     _decrypt_with_kms,
     _encrypt_data,
     _encrypt_with_kms,
+    _get_data,
     _get_encryption_key,
+    _get_parameter_names_by_describe,
+    _get_parameters_by_names,
     get_keys,
     get_keys_env,
 )
@@ -579,3 +582,173 @@ class TestClient(unittest.TestCase):
                 kms_region_name=None,
             )
         self.assertIn("KMS region is not provided", str(context.exception))
+
+    def test_get_parameter_names_by_describe(self):
+        """Test getting parameter names using describe_parameters"""
+        ssm_client = MagicMock()
+        ssm_client.describe_parameters.return_value = {
+            "Parameters": [
+                {"Name": "/myapp/db_host"},
+                {"Name": "/myapp/db_port"},
+                {"Name": "/myapp/db_user"},
+            ]
+        }
+
+        names = _get_parameter_names_by_describe(ssm_client, "/myapp/")
+        self.assertEqual(names, ["/myapp/db_host", "/myapp/db_port", "/myapp/db_user"])
+
+        # Verify describe_parameters was called with correct filters
+        ssm_client.describe_parameters.assert_called_once()
+        call_args = ssm_client.describe_parameters.call_args
+        self.assertIn("ParameterFilters", call_args[1])
+        filters = call_args[1]["ParameterFilters"]
+        self.assertEqual(filters[0]["Key"], "Name")
+        self.assertEqual(filters[0]["Option"], "BeginsWith")
+        self.assertEqual(filters[0]["Values"], ["/myapp/"])
+
+    def test_get_parameter_names_by_describe_with_pagination(self):
+        """Test getting parameter names with pagination"""
+        ssm_client = MagicMock()
+        ssm_client.describe_parameters.side_effect = [
+            {
+                "Parameters": [
+                    {"Name": "/myapp/param1"},
+                    {"Name": "/myapp/param2"},
+                ],
+                "NextToken": "token123",
+            },
+            {
+                "Parameters": [
+                    {"Name": "/myapp/param3"},
+                ]
+            },
+        ]
+
+        names = _get_parameter_names_by_describe(ssm_client, "/myapp/")
+        self.assertEqual(names, ["/myapp/param1", "/myapp/param2", "/myapp/param3"])
+        self.assertEqual(ssm_client.describe_parameters.call_count, 2)
+
+    def test_get_parameters_by_names(self):
+        """Test getting parameters by name list"""
+        ssm_client = MagicMock()
+        ssm_client.get_parameters.return_value = {
+            "Parameters": [
+                {"Name": "/myapp/db_host", "Value": "localhost"},
+                {"Name": "/myapp/db_port", "Value": "5432"},
+            ]
+        }
+
+        response = _get_parameters_by_names(
+            ssm_client, ["/myapp/db_host", "/myapp/db_port"]
+        )
+        self.assertEqual(len(response["Parameters"]), 2)
+        self.assertEqual(response["Parameters"][0]["Name"], "/myapp/db_host")
+
+    def test_get_parameters_by_names_batching(self):
+        """Test that get_parameters_by_names batches requests (max 10 per call)"""
+        ssm_client = MagicMock()
+        # Create response for 15 parameters
+        param_names = [f"/myapp/param{i}" for i in range(15)]
+
+        ssm_client.get_parameters.side_effect = [
+            {
+                "Parameters": [
+                    {"Name": name, "Value": f"value{i}"}
+                    for i, name in enumerate(param_names[:10])
+                ]
+            },
+            {
+                "Parameters": [
+                    {"Name": name, "Value": f"value{i + 10}"}
+                    for i, name in enumerate(param_names[10:])
+                ]
+            },
+        ]
+
+        response = _get_parameters_by_names(ssm_client, param_names)
+        self.assertEqual(len(response["Parameters"]), 15)
+        # Should be called twice (10 + 5)
+        self.assertEqual(ssm_client.get_parameters.call_count, 2)
+
+    def test_get_keys_with_bydescribe_method(self):
+        """Test get_keys with bydescribe discovery method"""
+        client = boto3.client("ssm")
+        stubber = Stubber(client)
+
+        # Mock describe_parameters
+        describe_response = {"Parameters": [{"Name": "/some/path/x"}]}
+        stubber.add_response("describe_parameters", describe_response)
+
+        # Mock get_parameters
+        get_response = {"Parameters": [{"Name": "/some/path/x", "Value": "xvalue"}]}
+        stubber.add_response("get_parameters", get_response)
+
+        with patch("ssm.boto3") as m:
+            with stubber:
+                m.client.return_value = client
+                data = get_keys(
+                    "sa-east-1",
+                    "/some/path/",
+                    cache_file=None,
+                    key_discovery="bydescribe",
+                )
+
+                self.assertEqual(data["x"], "xvalue")
+
+    def test_key_discovery_env_variable(self):
+        """Test AWS_SSM_KEY_DISCOVERY environment variable"""
+        os.environ["AWS_SSM_REGION_NAME"] = "region"
+        os.environ["AWS_SSM_APP_PATH"] = "/path/"
+        os.environ["AWS_SSM_KEY_DISCOVERY"] = "bydescribe"
+
+        with patch("ssm.get_keys") as fn:
+            get_keys_env()
+            params = fn.call_args_list[0][1]
+            self.assertEqual(params["key_discovery"], "bydescribe")
+
+    def test_key_discovery_default_is_bypath(self):
+        """Test that key_discovery defaults to 'bypath'"""
+        os.environ["AWS_SSM_REGION_NAME"] = "region"
+        os.environ["AWS_SSM_APP_PATH"] = "/path/"
+        # Do not set AWS_SSM_KEY_DISCOVERY
+
+        with patch("ssm.get_keys") as fn:
+            get_keys_env()
+            params = fn.call_args_list[0][1]
+            self.assertEqual(params["key_discovery"], "bypath")
+
+    def test_invalid_discovery_method_in_get_keys(self):
+        """Test that get_keys raises ValueError for invalid discovery method"""
+        with self.assertRaises(ValueError) as context:
+            get_keys(
+                region_name="us-east-1",
+                key_path="/path/",
+                cache_file=None,
+                key_discovery="invalid_method",
+            )
+        self.assertIn("Invalid key discovery method", str(context.exception))
+        self.assertIn("invalid_method", str(context.exception))
+        self.assertIn("bypath", str(context.exception))
+        self.assertIn("bydescribe", str(context.exception))
+
+    def test_discovery_method_constants(self):
+        """Test that discovery method constants are properly defined"""
+        from ssm import (
+            KEY_DISCOVERY_BYDESCRIBE,
+            KEY_DISCOVERY_BYPATH,
+            VALID_KEY_DISCOVERY_METHODS,
+        )
+
+        self.assertEqual(KEY_DISCOVERY_BYPATH, "bypath")
+        self.assertEqual(KEY_DISCOVERY_BYDESCRIBE, "bydescribe")
+        self.assertIn(KEY_DISCOVERY_BYPATH, VALID_KEY_DISCOVERY_METHODS)
+        self.assertIn(KEY_DISCOVERY_BYDESCRIBE, VALID_KEY_DISCOVERY_METHODS)
+        self.assertEqual(len(VALID_KEY_DISCOVERY_METHODS), 2)
+
+    def test_get_data_uses_default_bypath(self):
+        """Test that _get_data uses bypath as default"""
+        ssm_client = MagicMock()
+        ssm_client.get_parameters_by_path.return_value = {"Parameters": []}
+
+        _get_data(ssm_client, "/path/", next_token=None, with_decryption=True)
+        ssm_client.get_parameters_by_path.assert_called_once()

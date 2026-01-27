@@ -33,6 +33,7 @@ This method will return parameters from ssm.
 - `encryption_key` optional key to encrypt cached data on disk. If not provided, uses `AWS_SSM_ENCRYPTION_KEY` environment variable.
 - `kms_key_id` optional AWS KMS key ID or ARN for cache encryption. When provided, uses AWS KMS instead of local encryption (supersedes `encryption_key`).
 - `kms_region_name` optional AWS region for KMS operations. If not provided, uses `region_name`.
+- `key_discovery` optional parameter discovery method ("bypath" for get_parameters_by_path, or "bydescribe" for describe_parameters + get_parameters). Defaults to "bypath".
 
 ### `get_keys_env`
 This method will return the same information that `get_keys` but instead of asking for arguments it will obtain the information from the environment variables. In order to use it you have to define the following variables.
@@ -48,6 +49,7 @@ AWS_SSM_FAIL_ON_ERROR # default 0
 AWS_SSM_ENCRYPTION_KEY # optional key for encrypting cached data
 AWS_SSM_ENCRYPTION_KMS_KEY # optional KMS key ID or ARN (supersedes AWS_SSM_ENCRYPTION_KEY)
 AWS_SSM_ENCRYPTION_KMS_REGION # optional AWS region for KMS operations (defaults to AWS_SSM_REGION_NAME)
+AWS_SSM_KEY_DISCOVERY # optional parameter discovery method ("bypath" default, or "bydescribe")
 ```
 for example
 ```
@@ -59,6 +61,74 @@ AWS_SSM_WITH_DECRYPTION=1
 AWS_SSM_FAIL_ON_ERROR=0
 AWS_SSM_ENCRYPTION_KMS_KEY=arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012
 AWS_SSM_ENCRYPTION_KMS_REGION=us-east-1
+AWS_SSM_KEY_DISCOVERY=bydescribe
+```
+
+## Parameter Discovery Methods
+
+The library supports two parameter discovery methods to accommodate different IAM permission models:
+
+### 1. ByPath (Default) - `bypath`
+
+Uses `get_parameters_by_path` API - faster and more efficient when you have path-based IAM permissions.
+
+```bash
+# Default behavior - no configuration needed
+export AWS_SSM_KEY_DISCOVERY=bypath
+# Or just omit the variable (bypath is default)
+```
+
+**Pros:**
+- Faster - fewer API calls
+- More efficient
+- Recommended for standard setups
+
+**Cons:**
+- Requires `ssm:GetParametersByPath` IAM permission
+- May not work with tag-based IAM filtering
+
+### 2. ByDescribe - `bydescribe`
+
+Uses `describe_parameters` + `get_parameters` APIs - supports tag-based IAM filtering and resource-level permissions.
+
+```bash
+export AWS_SSM_KEY_DISCOVERY=bydescribe
+```
+
+**Pros:**
+- Supports tag-based IAM filtering
+- More granular permission control
+- Works with complex IAM policies
+
+**Cons:**
+- Slightly slower - requires two API calls per batch of parameters
+- More API calls overall
+
+**When to use:**
+- Your IAM policy uses tags for parameter filtering
+- You don't have `GetParametersByPath` permission
+- You need fine-grained access control
+
+**Example IAM Policy for bydescribe:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeParameters",
+        "ssm:GetParameters"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Environment": "production"
+        }
+      }
+    }
+  ]
+}
 ```
 
 ## Installation
