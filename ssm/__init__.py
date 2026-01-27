@@ -17,6 +17,62 @@ except ImportError:
 CACHE_NULL_VALUE_PATH = [None, ""]
 
 
+def _get_kms_client(region_name):
+    """
+    Create a KMS client for the specified region.
+
+    Parameters:
+        region_name (str): AWS region for the KMS client.
+
+    Returns:
+        boto3 KMS client.
+    """
+    return boto3.client("kms", region_name=region_name)
+
+
+def _encrypt_with_kms(data, kms_key_id, region_name):
+    """
+    Encrypt data using AWS KMS.
+
+    Parameters:
+        data (dict): Data to encrypt.
+        kms_key_id (str): KMS key ID or ARN to use for encryption.
+        region_name (str): AWS region where KMS key is located.
+
+    Returns:
+        str: Base64-encoded encrypted blob.
+
+    Raises:
+        Exception: If KMS encryption fails.
+    """
+    json_data = json.dumps(data)
+    kms_client = _get_kms_client(region_name)
+    response = kms_client.encrypt(KeyId=kms_key_id, Plaintext=json_data.encode())
+    encrypted_blob = response["CiphertextBlob"]
+    return base64.b64encode(encrypted_blob).decode()
+
+
+def _decrypt_with_kms(encrypted_data, region_name):
+    """
+    Decrypt data using AWS KMS.
+
+    Parameters:
+        encrypted_data (str): Base64-encoded encrypted blob.
+        region_name (str): AWS region where KMS key is located.
+
+    Returns:
+        dict: Decrypted and parsed JSON data.
+
+    Raises:
+        Exception: If KMS decryption fails or data is invalid.
+    """
+    kms_client = _get_kms_client(region_name)
+    encrypted_blob = base64.b64decode(encrypted_data)
+    response = kms_client.decrypt(CiphertextBlob=encrypted_blob)
+    plaintext = response["Plaintext"].decode()
+    return json.loads(plaintext)
+
+
 def _get_encryption_key(encryption_key=None):
     """
     Derive a Fernet-compatible encryption key from the provided passphrase.
@@ -55,17 +111,32 @@ def _get_encryption_key(encryption_key=None):
     return derived_key
 
 
-def _encrypt_data(data, encryption_key=None):
+def _encrypt_data(
+    data, encryption_key=None, kms_key_id=None, region_name=None, kms_region_name=None
+):
     """
     Serialize the given data and, if an encryption key is provided, return an encrypted payload suitable for cache storage.
 
+    KMS encryption takes precedence over local encryption if both are specified.
+
     Parameters:
         data: A JSON-serializable Python object to be stored.
-        encryption_key (str | None): Optional encryption key; when provided the serialized data is encrypted and returned as a base64-encoded string. When omitted or invalid, the function returns the plain JSON serialization.
+        encryption_key (str | None): Optional encryption key; when provided the serialized data is encrypted using Fernet and returned as a base64-encoded string.
+        kms_key_id (str | None): Optional KMS key ID or ARN; when provided, uses AWS KMS for encryption (takes precedence over encryption_key).
+        region_name (str | None): AWS region for SSM client (used as fallback for KMS region if kms_region_name not provided).
+        kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
 
     Returns:
-        str: A base64-encoded encrypted payload when an encryption key is used, otherwise the JSON string representation of `data`.
+        str: A base64-encoded encrypted payload when encryption is used, otherwise the JSON string representation of `data`.
     """
+    # KMS takes precedence
+    if kms_key_id:
+        kms_region = kms_region_name or region_name
+        if kms_region:
+            return _encrypt_with_kms(data, kms_key_id, kms_region)
+        else:
+            raise ValueError("KMS region is not provided")
+
     key = _get_encryption_key(encryption_key)
     if key is None:
         return json.dumps(data)
@@ -76,15 +147,24 @@ def _encrypt_data(data, encryption_key=None):
     return base64.b64encode(encrypted).decode()
 
 
-def _decrypt_data(encrypted_data, encryption_key=None):
+def _decrypt_data(
+    encrypted_data,
+    encryption_key=None,
+    kms_key_id=None,
+    region_name=None,
+    kms_region_name=None,
+):
     """
     Parse or decrypt cached JSON data.
 
-    If an encryption key is provided, the function derives a decryption key, base64-decodes and decrypts the input, then parses the resulting JSON. If no encryption key is provided, the function parses the input directly as JSON.
+    If KMS key ID is provided, attempts KMS decryption first. Falls back to local encryption if KMS fails or is not configured.
 
     Parameters:
-        encrypted_data (str): Base64-encoded encrypted payload or a JSON string when no encryption key is used.
+        encrypted_data (str): Base64-encoded encrypted payload or a JSON string when no encryption is used.
         encryption_key (str | None): Optional raw encryption key used to derive the decryption key; pass None to treat `encrypted_data` as plain JSON.
+        kms_key_id (str | None): Optional KMS key ID or ARN; when provided, uses AWS KMS for decryption.
+        region_name (str | None): AWS region for SSM client (used as fallback for KMS region if kms_region_name not provided).
+        kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
 
     Returns:
         Any: The Python object resulting from parsing the JSON content.
@@ -92,6 +172,17 @@ def _decrypt_data(encrypted_data, encryption_key=None):
     Raises:
         ValueError: If decryption or JSON parsing fails, indicating an invalid encryption key or a corrupted cache file.
     """
+    # Try KMS decryption first if key ID is provided
+    if kms_key_id:
+        kms_region = kms_region_name or region_name
+        if kms_region:
+            try:
+                return _decrypt_with_kms(encrypted_data, kms_region)
+            except Exception as e:
+                raise ValueError(f"KMS decryption failed: {str(e)}")
+        else:
+            raise ValueError("KMS region is not provided")
+
     key = _get_encryption_key(encryption_key)
     if key is None:
         try:
@@ -136,13 +227,18 @@ def _get_data(client, key_path, next_token, with_decryption=True):
     return response
 
 
-def _get_cache_data(name, encryption_key=None):
+def _get_cache_data(
+    name, encryption_key=None, kms_key_id=None, region_name=None, kms_region_name=None
+):
     """
     Load and decrypt cached data from a file.
 
     Parameters:
         name (str): Path to the cache file to read.
         encryption_key (str | None): Optional encryption key used to decrypt the file; when None, the file is treated as plaintext JSON.
+        kms_key_id (str | None): Optional KMS key ID or ARN; when provided, uses AWS KMS for decryption.
+        region_name (str | None): AWS region for SSM client (used as fallback for KMS region if kms_region_name not provided).
+        kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
 
     Returns:
         cached_data (any | None): The parsed cache contents (typically a dict) on success, or `None` if the file is missing, unreadable, corrupted, or cannot be decrypted/parsed.
@@ -150,7 +246,13 @@ def _get_cache_data(name, encryption_key=None):
     try:
         with open(name) as f:
             encrypted_content = f.read()
-            return _decrypt_data(encrypted_content, encryption_key)
+            return _decrypt_data(
+                encrypted_content,
+                encryption_key,
+                kms_key_id,
+                region_name,
+                kms_region_name,
+            )
     except IOError:
         return None
     except ValueError:
@@ -158,17 +260,29 @@ def _get_cache_data(name, encryption_key=None):
         return None
 
 
-def _build_cache_data(name, data, encryption_key=None):
+def _build_cache_data(
+    name,
+    data,
+    encryption_key=None,
+    kms_key_id=None,
+    region_name=None,
+    kms_region_name=None,
+):
     """
-    Write the provided data to the file at `name`, encrypting the stored content when `encryption_key` is provided, and set the file permissions to owner read/write only (0o600).
+    Write the provided data to the file at `name`, encrypting the stored content when `encryption_key` or `kms_key_id` is provided, and set the file permissions to owner read/write only (0o600).
 
     Parameters:
         name (str): Filesystem path to write the cache to.
         data (any): JSON-serializable object to store in the cache.
-        encryption_key (str | None): Optional encryption key; when provided the stored content will be encrypted, otherwise it will be written as JSON.
+        encryption_key (str | None): Optional encryption key; when provided the stored content will be encrypted using Fernet.
+        kms_key_id (str | None): Optional KMS key ID or ARN; when provided, uses AWS KMS for encryption (takes precedence).
+        region_name (str | None): AWS region for SSM client (used as fallback for KMS region if kms_region_name not provided).
+        kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
     """
     with open(name, "w") as f:
-        encrypted_data = _encrypt_data(data, encryption_key)
+        encrypted_data = _encrypt_data(
+            data, encryption_key, kms_key_id, region_name, kms_region_name
+        )
         f.write(encrypted_data)
     os.chmod(name, 0o600)
 
@@ -181,6 +295,8 @@ def get_keys(
     with_decryption=False,
     fail_on_error=False,
     encryption_key=None,
+    kms_key_id=None,
+    kms_region_name=None,
 ):
     """
     Retrieve parameter values from AWS SSM Parameter Store under a given path, optionally caching the results to a local file with optional encryption.
@@ -193,6 +309,8 @@ def get_keys(
         with_decryption (bool): If True, request decrypted secure string values from SSM.
         fail_on_error (bool): If True, propagate exceptions raised while fetching from SSM; otherwise return an empty dict on error.
         encryption_key (str | None): Optional passphrase used to encrypt/decrypt the cache file; if None or empty, cache is stored as plain JSON.
+        kms_key_id (str | None): Optional KMS key ID or ARN for cache encryption; takes precedence over encryption_key.
+        kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
 
     Returns:
         dict: Mapping of parameter names (original name with key_path prefix removed) to their string values.
@@ -201,7 +319,9 @@ def get_keys(
         return {}
 
     if cache_file not in CACHE_NULL_VALUE_PATH:
-        cdata = _get_cache_data(cache_file, encryption_key)
+        cdata = _get_cache_data(
+            cache_file, encryption_key, kms_key_id, region_name, kms_region_name
+        )
         if cdata is not None:
             return cdata
 
@@ -231,7 +351,9 @@ def get_keys(
         keys[name] = k["Value"]
 
     if cache_file not in CACHE_NULL_VALUE_PATH:
-        _build_cache_data(cache_file, keys, encryption_key)
+        _build_cache_data(
+            cache_file, keys, encryption_key, kms_key_id, region_name, kms_region_name
+        )
     return keys
 
 
@@ -247,6 +369,8 @@ def get_keys_env():
     - AWS_SSM_WITH_DECRYPTION: "1" to request SSM decryption.
     - AWS_SSM_FAIL_ON_ERROR: "1" to propagate errors instead of returning an empty dict.
     - AWS_SSM_ENCRYPTION_KEY: optional key used to encrypt/decrypt the local cache.
+    - AWS_SSM_ENCRYPTION_KMS_KEY: optional KMS key ID or ARN for cache encryption (supersedes AWS_SSM_ENCRYPTION_KEY).
+    - AWS_SSM_ENCRYPTION_KMS_REGION: optional AWS region for KMS operations; if not provided, uses AWS_SSM_REGION_NAME.
 
     Returns:
         dict: Mapping of parameter names (with the configured path prefix removed) to their values.
@@ -259,4 +383,6 @@ def get_keys_env():
         with_decryption=os.environ.get("AWS_SSM_WITH_DECRYPTION") == "1",
         fail_on_error=os.environ.get("AWS_SSM_FAIL_ON_ERROR") == "1",
         encryption_key=os.environ.get("AWS_SSM_ENCRYPTION_KEY"),
+        kms_key_id=os.environ.get("AWS_SSM_ENCRYPTION_KMS_KEY"),
+        kms_region_name=os.environ.get("AWS_SSM_ENCRYPTION_KMS_REGION"),
     )
