@@ -57,9 +57,27 @@ AWS_SSM_FAIL_ON_ERROR=0
 
 ## Installation
 
-```python
+```bash
+# Basic installation (without encryption support)
 pip install git+https://github.com/carrerasrodrigo/aws-ssm-helper.git#egg=ssm
+
+# With encryption support for cache files (optional)
+pip install git+https://github.com/carrerasrodrigo/aws-ssm-helper.git#egg=ssm[encryption]
 ```
+
+### Cache Encryption (Optional)
+
+If you want to encrypt cached parameter data on disk, install the optional `cryptography` dependency:
+
+```bash
+pip install 'ssm[encryption]'
+# or manually
+pip install cryptography
+```
+
+**Note:** Cache encryption requires the `cryptography` library. If you use the `encryption_key` parameter without installing it, an error will be raised. For Lambda environments where `cryptography` may have compatibility issues, you can:
+1. Omit the `encryption_key` parameter (cache stored as plain JSON)
+2. Install the encryption extra: `pip install ssm[encryption]`
 
 ## SSM helper scripts
 This is a list of scripts that helps to parse text and replace values with keys in ssm.

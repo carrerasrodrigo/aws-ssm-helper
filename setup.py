@@ -6,7 +6,7 @@ os.chdir(os.path.normpath(os.path.join(os.path.abspath(__file__), os.pardir)))
 
 setuptools.setup(
     name="ssm",
-    version="0.2.0",
+    version="0.2.1",
     author="Rodrigo N. Carreras",
     author_email="rodrigo@comparaencasa.com",
     packages=["ssm"],
@@ -17,7 +17,10 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    install_requires=["boto3", "click", "cryptography"],
+    install_requires=["boto3", "click"],
+    extras_require={
+        "encryption": ["cryptography"],
+    },
     entry_points={
         "console_scripts": [
             "ssm_get_key = ssm.scripts.ssm_get_key:main",

@@ -3,9 +3,16 @@ import json
 import os
 
 import boto3
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+# Optional cryptography dependency for cache encryption
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    HAS_CRYPTOGRAPHY = True
+except ImportError:
+    HAS_CRYPTOGRAPHY = False
 
 CACHE_NULL_VALUE_PATH = [None, ""]
 
@@ -13,19 +20,28 @@ CACHE_NULL_VALUE_PATH = [None, ""]
 def _get_encryption_key(encryption_key=None):
     """
     Derive a Fernet-compatible encryption key from the provided passphrase.
-    
+
     When a non-empty string `encryption_key` is provided, a 32-byte key is derived using PBKDF2-HMAC-SHA256 with a fixed salt and 100000 iterations, then URL-safe base64-encoded for use with Fernet. If `encryption_key` is None or an empty/whitespace string, returns None.
-    
+
     Parameters:
         encryption_key (str | None): Passphrase to derive the encryption key from.
-    
+
     Returns:
         bytes | None: URL-safe base64-encoded derived key suitable for Fernet when `encryption_key` is provided, `None` otherwise.
+
+    Raises:
+        ImportError: If encryption_key is not None and cryptography library is not installed.
     """
     if not encryption_key or (
         isinstance(encryption_key, str) and not encryption_key.strip()
     ):
         return None
+
+    if not HAS_CRYPTOGRAPHY:
+        raise ImportError(
+            "The 'cryptography' library is required to use cache encryption. "
+            "Install it with: pip install 'ssm[encryption]' or pip install cryptography"
+        )
 
     # Derive a key from the provided key using PBKDF2
     salt = b"ssm_cache_salt_2024"  # Fixed salt for consistency
@@ -42,11 +58,11 @@ def _get_encryption_key(encryption_key=None):
 def _encrypt_data(data, encryption_key=None):
     """
     Serialize the given data and, if an encryption key is provided, return an encrypted payload suitable for cache storage.
-    
+
     Parameters:
         data: A JSON-serializable Python object to be stored.
         encryption_key (str | None): Optional encryption key; when provided the serialized data is encrypted and returned as a base64-encoded string. When omitted or invalid, the function returns the plain JSON serialization.
-    
+
     Returns:
         str: A base64-encoded encrypted payload when an encryption key is used, otherwise the JSON string representation of `data`.
     """
@@ -63,16 +79,16 @@ def _encrypt_data(data, encryption_key=None):
 def _decrypt_data(encrypted_data, encryption_key=None):
     """
     Parse or decrypt cached JSON data.
-    
+
     If an encryption key is provided, the function derives a decryption key, base64-decodes and decrypts the input, then parses the resulting JSON. If no encryption key is provided, the function parses the input directly as JSON.
-    
+
     Parameters:
         encrypted_data (str): Base64-encoded encrypted payload or a JSON string when no encryption key is used.
         encryption_key (str | None): Optional raw encryption key used to derive the decryption key; pass None to treat `encrypted_data` as plain JSON.
-    
+
     Returns:
         Any: The Python object resulting from parsing the JSON content.
-    
+
     Raises:
         ValueError: If decryption or JSON parsing fails, indicating an invalid encryption key or a corrupted cache file.
     """
@@ -97,12 +113,12 @@ def _decrypt_data(encrypted_data, encryption_key=None):
 def _get_data(client, key_path, next_token, with_decryption=True):
     """
     Request parameters under the specified SSM path using the provided client.
-    
+
     Parameters:
         key_path (str): The SSM parameter path to query.
         next_token (str | None): Pagination token from a previous response; included when provided.
         with_decryption (bool): Whether to request decrypted parameter values.
-    
+
     Returns:
         dict: The response dictionary returned by the client's get_parameters_by_path call.
     """
@@ -123,13 +139,13 @@ def _get_data(client, key_path, next_token, with_decryption=True):
 def _get_cache_data(name, encryption_key=None):
     """
     Load and decrypt cached data from a file.
-    
+
     Parameters:
-    	name (str): Path to the cache file to read.
-    	encryption_key (str | None): Optional encryption key used to decrypt the file; when None, the file is treated as plaintext JSON.
-    
+        name (str): Path to the cache file to read.
+        encryption_key (str | None): Optional encryption key used to decrypt the file; when None, the file is treated as plaintext JSON.
+
     Returns:
-    	cached_data (any | None): The parsed cache contents (typically a dict) on success, or `None` if the file is missing, unreadable, corrupted, or cannot be decrypted/parsed.
+        cached_data (any | None): The parsed cache contents (typically a dict) on success, or `None` if the file is missing, unreadable, corrupted, or cannot be decrypted/parsed.
     """
     try:
         with open(name) as f:
@@ -145,7 +161,7 @@ def _get_cache_data(name, encryption_key=None):
 def _build_cache_data(name, data, encryption_key=None):
     """
     Write the provided data to the file at `name`, encrypting the stored content when `encryption_key` is provided, and set the file permissions to owner read/write only (0o600).
-    
+
     Parameters:
         name (str): Filesystem path to write the cache to.
         data (any): JSON-serializable object to store in the cache.
@@ -168,18 +184,18 @@ def get_keys(
 ):
     """
     Retrieve parameter values from AWS SSM Parameter Store under a given path, optionally caching the results to a local file with optional encryption.
-    
+
     Parameters:
-    	region_name (str): AWS region to create the SSM client in.
-    	key_path (str): Parameter path prefix to fetch; returned keys have this prefix removed.
-    	cache_file (str): Path to a local cache file; if set to None or empty string, caching is disabled.
-    	ignore_load (bool): If True, skip loading from cache and always fetch from SSM.
-    	with_decryption (bool): If True, request decrypted secure string values from SSM.
-    	fail_on_error (bool): If True, propagate exceptions raised while fetching from SSM; otherwise return an empty dict on error.
-    	encryption_key (str | None): Optional passphrase used to encrypt/decrypt the cache file; if None or empty, cache is stored as plain JSON.
-    
+        region_name (str): AWS region to create the SSM client in.
+        key_path (str): Parameter path prefix to fetch; returned keys have this prefix removed.
+        cache_file (str): Path to a local cache file; if set to None or empty string, caching is disabled.
+        ignore_load (bool): If True, skip loading from cache and always fetch from SSM.
+        with_decryption (bool): If True, request decrypted secure string values from SSM.
+        fail_on_error (bool): If True, propagate exceptions raised while fetching from SSM; otherwise return an empty dict on error.
+        encryption_key (str | None): Optional passphrase used to encrypt/decrypt the cache file; if None or empty, cache is stored as plain JSON.
+
     Returns:
-    	dict: Mapping of parameter names (original name with key_path prefix removed) to their string values.
+        dict: Mapping of parameter names (original name with key_path prefix removed) to their string values.
     """
     if ignore_load:
         return {}
@@ -222,7 +238,7 @@ def get_keys(
 def get_keys_env():
     """
     Builds SSM retrieval options from environment variables and returns the resulting keys mapping.
-    
+
     Reads the following environment variables to configure behavior:
     - AWS_SSM_REGION_NAME: AWS region (required).
     - AWS_SSM_APP_PATH: SSM parameter path prefix (required).
@@ -231,7 +247,7 @@ def get_keys_env():
     - AWS_SSM_WITH_DECRYPTION: "1" to request SSM decryption.
     - AWS_SSM_FAIL_ON_ERROR: "1" to propagate errors instead of returning an empty dict.
     - AWS_SSM_ENCRYPTION_KEY: optional key used to encrypt/decrypt the local cache.
-    
+
     Returns:
         dict: Mapping of parameter names (with the configured path prefix removed) to their values.
     """
