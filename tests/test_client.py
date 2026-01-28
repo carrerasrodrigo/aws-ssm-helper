@@ -752,3 +752,97 @@ class TestClient(unittest.TestCase):
 
         _get_data(ssm_client, "/path/", next_token=None, with_decryption=True)
         ssm_client.get_parameters_by_path.assert_called_once()
+
+    def test_get_keys_with_key_path_list(self):
+        """Test get_keys with key_path_list parameter"""
+        response = {
+            "Parameters": [
+                {"Name": "/app/db/host", "Value": "localhost"},
+                {"Name": "/app/db/port", "Value": "5432"},
+                {"Name": "/app/db/user", "Value": "admin"},
+            ]
+        }
+
+        client = boto3.client("ssm")
+        stubber = Stubber(client)
+        stubber.add_response("get_parameters", response)
+
+        with patch("ssm.boto3") as m:
+            with stubber:
+                m.client.return_value = client
+                data = get_keys(
+                    "sa-east-1",
+                    "/app/",
+                    cache_file=None,
+                    key_path_list=["db/host", "db/port", "db/user"],
+                )
+
+                # Check that all keys are present
+                self.assertEqual(data["db/host"], "localhost")
+                self.assertEqual(data["db/port"], "5432")
+                self.assertEqual(data["db/user"], "admin")
+
+    def test_get_keys_with_key_path_list_returns_values(self):
+        """Test get_keys with key_path_list correctly processes returned values"""
+        response = {
+            "Parameters": [
+                {"Name": "/app/db/host", "Value": "localhost"},
+                {"Name": "/app/db/port", "Value": "5432"},
+            ]
+        }
+
+        client = boto3.client("ssm")
+        stubber = Stubber(client)
+        stubber.add_response("get_parameters", response)
+
+        with patch("ssm.boto3") as m:
+            with stubber:
+                m.client.return_value = client
+                data = get_keys(
+                    "sa-east-1",
+                    "/app/",
+                    cache_file=None,
+                    key_path_list=["db/host", "db/port"],
+                )
+
+                # Check returned values have prefix removed
+                self.assertEqual(data["db/host"], "localhost")
+                self.assertEqual(data["db/port"], "5432")
+
+    def test_key_path_list_env_variable(self):
+        """Test AWS_SSM_KEY_PATH_LIST environment variable parsing"""
+        os.environ["AWS_SSM_REGION_NAME"] = "region"
+        os.environ["AWS_SSM_APP_PATH"] = "/path/"
+        os.environ["AWS_SSM_KEY_PATH_LIST"] = "key1,key2,key3"
+
+        with patch("ssm.get_keys") as fn:
+            get_keys_env()
+            params = fn.call_args_list[0][1]
+            self.assertEqual(params["key_path_list"], ["key1", "key2", "key3"])
+
+    def test_key_path_list_rejects_absolute_paths(self):
+        """Test that key_path_list rejects keys starting with /"""
+        with self.assertRaises(ValueError) as ctx:
+            get_keys(
+                "sa-east-1",
+                "/app/",
+                cache_file=None,
+                key_path_list=["db/host", "/db/port"],
+            )
+
+        self.assertIn("should not start with '/'", str(ctx.exception))
+        self.assertIn("/db/port", str(ctx.exception))
+
+    def test_key_path_list_single_absolute_path_error(self):
+        """Test error message for single absolute path in key_path_list"""
+        with self.assertRaises(ValueError) as ctx:
+            get_keys(
+                "sa-east-1",
+                "/app/",
+                cache_file=None,
+                key_path_list=["/absolute/path"],
+            )
+
+        error_msg = str(ctx.exception)
+        self.assertIn("should not start with '/'", error_msg)
+        self.assertIn("/absolute/path", error_msg)

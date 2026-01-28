@@ -34,6 +34,7 @@ This method will return parameters from ssm.
 - `kms_key_id` optional AWS KMS key ID or ARN for cache encryption. When provided, uses AWS KMS instead of local encryption (supersedes `encryption_key`).
 - `kms_region_name` optional AWS region for KMS operations. If not provided, uses `region_name`.
 - `key_discovery` optional parameter discovery method ("bypath" for get_parameters_by_path, or "bydescribe" for describe_parameters + get_parameters). Defaults to "bypath".
+- `key_path_list` optional list of key paths to merge with `key_path`. When provided, uses `get_parameters` API to fetch specific parameters from multiple paths.
 
 ### `get_keys_env`
 This method will return the same information that `get_keys` but instead of asking for arguments it will obtain the information from the environment variables. In order to use it you have to define the following variables.
@@ -50,6 +51,7 @@ AWS_SSM_ENCRYPTION_KEY # optional key for encrypting cached data
 AWS_SSM_ENCRYPTION_KMS_KEY # optional KMS key ID or ARN (supersedes AWS_SSM_ENCRYPTION_KEY)
 AWS_SSM_ENCRYPTION_KMS_REGION # optional AWS region for KMS operations (defaults to AWS_SSM_REGION_NAME)
 AWS_SSM_KEY_DISCOVERY # optional parameter discovery method ("bypath" default, or "bydescribe")
+AWS_SSM_KEY_PATH_LIST # optional comma-separated list of key paths to merge with AWS_SSM_APP_PATH
 ```
 for example
 ```
@@ -62,6 +64,7 @@ AWS_SSM_FAIL_ON_ERROR=0
 AWS_SSM_ENCRYPTION_KMS_KEY=arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012
 AWS_SSM_ENCRYPTION_KMS_REGION=us-east-1
 AWS_SSM_KEY_DISCOVERY=bydescribe
+AWS_SSM_KEY_PATH_LIST=db/host,db/port,db/user
 ```
 
 ## Parameter Discovery Methods
@@ -130,6 +133,70 @@ export AWS_SSM_KEY_DISCOVERY=bydescribe
   ]
 }
 ```
+
+## Fetching Multiple Key Paths
+
+The `key_path_list` parameter allows you to fetch parameters from multiple paths efficiently using a single API call. This is useful when you need parameters from different directories or when you want to avoid path-based discovery.
+
+### Usage
+
+**Python API:**
+```python
+from ssm import get_keys
+
+# Fetch specific parameters from multiple paths
+params = get_keys(
+    region_name='us-east-1',
+    key_path='/app/',
+    key_path_list=['db/host', 'db/port', 'db/user', 'cache/redis_url']
+)
+
+# Resulting parameters fetched:
+# /app/db/host, /app/db/port, /app/db/user, /app/cache/redis_url
+
+# Returned dictionary:
+# {'db/host': 'localhost', 'db/port': '5432', 'db/user': 'admin', 'cache/redis_url': 'redis://...'}
+```
+
+**Environment variables:**
+```bash
+export AWS_SSM_REGION_NAME=us-east-1
+export AWS_SSM_APP_PATH=/app/
+export AWS_SSM_KEY_PATH_LIST=db/host,db/port,db/user,cache/redis_url
+```
+
+Then in Python:
+```python
+from ssm import get_keys_env
+
+params = get_keys_env()
+```
+
+### Behavior
+
+- When `key_path_list` is provided, it merges each item with `key_path`
+- Uses `get_parameters` API for direct parameter retrieval
+- `key_discovery` method is ignored when `key_path_list` is used
+- Parameters are returned with the `key_path` prefix removed
+- Works with all encryption methods (KMS, local encryption, or none)
+- **Keys in `key_path_list` must be relative paths** (not starting with `/`)
+  - ✅ Valid: `['db/host', 'db/port', 'cache/redis']`
+  - ❌ Invalid: `['/db/host', '/db/port']` - raises `ValueError`
+
+### When to Use
+
+- Fetching a known set of specific parameters
+- Parameters are scattered across different sub-paths
+- You need more control over which parameters to fetch
+- Combining with other discovery methods via multiple calls
+
+### Comparison
+
+| Method | Use Case |
+|--------|----------|
+| `key_discovery="bypath"` (default) | Fetch all parameters under a path |
+| `key_discovery="bydescribe"` | Fetch all parameters with tag-based filtering |
+| `key_path_list` | Fetch specific known parameters from multiple paths |
 
 ## Installation
 
@@ -227,7 +294,7 @@ params = get_keys(
 )
 ```
 
-**Note:** 
+**Note:**
 - Requires the `cryptography` library
 - May have compatibility issues with Lambda (use KMS instead)
 - Less secure than KMS for production use

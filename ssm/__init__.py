@@ -392,6 +392,7 @@ def get_keys(
     kms_key_id=None,
     kms_region_name=None,
     key_discovery=None,
+    key_path_list=None,
 ):
     """
     Retrieve parameter values from AWS SSM Parameter Store under a given path, optionally caching the results to a local file with optional encryption.
@@ -407,6 +408,7 @@ def get_keys(
         kms_key_id (str | None): Optional KMS key ID or ARN for cache encryption; takes precedence over encryption_key.
         kms_region_name (str | None): AWS region for KMS operations; if not provided, uses region_name.
         key_discovery (str): Method to discover parameters ("bypath" for get_parameters_by_path, "bydescribe" for describe_parameters + get_parameters).
+        key_path_list (list | None): Optional list of key paths to merge with key_path. Each path is concatenated with key_path and parameters are fetched using get_parameters API.
 
     Returns:
         dict: Mapping of parameter names (original name with key_path prefix removed) to their string values.
@@ -423,6 +425,15 @@ def get_keys(
             f"Valid methods are: {', '.join(sorted(VALID_KEY_DISCOVERY_METHODS))}"
         )
 
+    # Validate key_path_list - keys should not start with /
+    if key_path_list:
+        for key in key_path_list:
+            if key.startswith("/"):
+                raise ValueError(
+                    f"Keys in key_path_list should not start with '/'. "
+                    f"Got: '{key}'. Use relative paths like 'db/host' instead of '/db/host'."
+                )
+
     if ignore_load:
         return {}
 
@@ -434,23 +445,36 @@ def get_keys(
             return cdata
 
     client = boto3.client("ssm", region_name=region_name)
-    next_token = None
     results = []
 
-    while True:
+    # If key_path_list is provided, use get_parameters with merged paths
+    if key_path_list:
         try:
-            response = _get_data(
-                client, key_path, next_token, with_decryption, key_discovery
-            )
+            # Merge key_path with each item in key_path_list
+            full_paths = [key_path + item for item in key_path_list]
+            response = _get_parameters_by_names(client, full_paths, with_decryption)
+            results = response.get("Parameters", [])
         except Exception as ex:
             if fail_on_error:
                 raise ex
             return {}
+    else:
+        # Use standard key_discovery method
+        next_token = None
+        while True:
+            try:
+                response = _get_data(
+                    client, key_path, next_token, with_decryption, key_discovery
+                )
+            except Exception as ex:
+                if fail_on_error:
+                    raise ex
+                return {}
 
-        results += response["Parameters"]
-        next_token = response.get("NextToken")
-        if next_token is None:
-            break
+            results += response["Parameters"]
+            next_token = response.get("NextToken")
+            if next_token is None:
+                break
 
     keys = {}
     for k in results:
@@ -482,10 +506,14 @@ def get_keys_env():
     - AWS_SSM_ENCRYPTION_KMS_KEY: optional KMS key ID or ARN for cache encryption (supersedes AWS_SSM_ENCRYPTION_KEY).
     - AWS_SSM_ENCRYPTION_KMS_REGION: optional AWS region for KMS operations; if not provided, uses AWS_SSM_REGION_NAME.
     - AWS_SSM_KEY_DISCOVERY: parameter discovery method ("bypath" for get_parameters_by_path or "bydescribe" for describe_parameters).
+    - AWS_SSM_KEY_PATH_LIST: optional comma-separated list of key paths to merge with AWS_SSM_APP_PATH.
 
     Returns:
         dict: Mapping of parameter names (with the configured path prefix removed) to their values.
     """
+    key_path_list_env = os.environ.get("AWS_SSM_KEY_PATH_LIST")
+    key_path_list = key_path_list_env.split(",") if key_path_list_env else None
+
     return get_keys(
         region_name=os.environ["AWS_SSM_REGION_NAME"],
         key_path=os.environ["AWS_SSM_APP_PATH"],
@@ -497,4 +525,5 @@ def get_keys_env():
         kms_key_id=os.environ.get("AWS_SSM_ENCRYPTION_KMS_KEY"),
         kms_region_name=os.environ.get("AWS_SSM_ENCRYPTION_KMS_REGION"),
         key_discovery=os.environ.get("AWS_SSM_KEY_DISCOVERY", KEY_DISCOVERY_BYPATH),
+        key_path_list=key_path_list,
     )
