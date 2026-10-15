@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,7 @@ import boto3
 from botocore.stub import ANY, Stubber
 
 from ssm import (
+    DEFAULT_CACHE_FILE,
     _decrypt_data,
     _decrypt_with_kms,
     _encrypt_data,
@@ -155,6 +157,21 @@ class TestClient(unittest.TestCase):
             self.assertTrue(params["with_decryption"])
             self.assertTrue(params["fail_on_error"])
 
+    def test_environ_default_cache_file(self):
+        """get_keys_env uses the system temp directory when AWS_SSM_CACHE_FILE is unset."""
+        os.environ["AWS_SSM_REGION_NAME"] = "region"
+        os.environ["AWS_SSM_APP_PATH"] = "path"
+        os.environ.pop("AWS_SSM_CACHE_FILE", None)
+
+        with patch("ssm.get_keys") as fn:
+            get_keys_env()
+            params = fn.call_args_list[0][1]
+            self.assertEqual(
+                params["cache_file"],
+                os.path.join(tempfile.gettempdir(), "keys.enc"),
+            )
+            self.assertEqual(params["cache_file"], DEFAULT_CACHE_FILE)
+
     def test_environ_with_no_cache(self):
         """
         Verify that get_keys_env loads parameters from AWS SSM using environment variables and does not create a cache file when AWS_SSM_CACHE_FILE is empty.
@@ -187,7 +204,7 @@ class TestClient(unittest.TestCase):
                 self.assertEqual(len(data), 1)
                 # When AWS_SSM_CACHE_FILE is empty, no cache file should be created
                 self.assertFalse(os.path.exists(".cache"))
-                self.assertFalse(os.path.exists("/tmp/keys.enc"))
+                self.assertFalse(os.path.exists(DEFAULT_CACHE_FILE))
 
     def test_encryption_key_generation(self):
         # Test with no key set

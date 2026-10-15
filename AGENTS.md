@@ -280,7 +280,7 @@ def test_cache_creation(self):
 
 ### Optional for Behavior
 
-- `AWS_SSM_CACHE_FILE`: Cache file path (default: `/tmp/keys.enc`)
+- `AWS_SSM_CACHE_FILE`: Cache file path (default: `keys.enc` in the system temp directory)
 - `AWS_SSM_IGNORE_LOAD`: Skip cache loading
 - `AWS_SSM_WITH_DECRYPTION`: Decrypt SSM SecureString parameters
 - `AWS_SSM_FAIL_ON_ERROR`: Raise errors instead of returning empty dict
