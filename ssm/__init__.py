@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import tempfile
 
 import boto3
 
@@ -15,6 +16,7 @@ except ImportError:
     HAS_CRYPTOGRAPHY = False
 
 CACHE_NULL_VALUE_PATH = [None, ""]
+DEFAULT_CACHE_FILE = os.path.join(tempfile.gettempdir(), "keys.enc")
 
 # Parameter discovery methods
 KEY_DISCOVERY_BYPATH = "bypath"
@@ -384,7 +386,7 @@ def _build_cache_data(
 def get_keys(
     region_name,
     key_path,
-    cache_file="/tmp/keys.enc",
+    cache_file=DEFAULT_CACHE_FILE,
     ignore_load=False,
     with_decryption=False,
     fail_on_error=False,
@@ -400,7 +402,7 @@ def get_keys(
     Parameters:
         region_name (str): AWS region to create the SSM client in.
         key_path (str): Parameter path prefix to fetch; returned keys have this prefix removed.
-        cache_file (str): Path to a local cache file; if set to None or empty string, caching is disabled.
+        cache_file (str): Path to a local cache file. Defaults to keys.enc in the system temp directory. If set to None or empty string, caching is disabled.
         ignore_load (bool): If True, skip loading from cache and always fetch from SSM.
         with_decryption (bool): If True, request decrypted secure string values from SSM.
         fail_on_error (bool): If True, propagate exceptions raised while fetching from SSM; otherwise return an empty dict on error.
@@ -498,7 +500,7 @@ def get_keys_env():
     Reads the following environment variables to configure behavior:
     - AWS_SSM_REGION_NAME: AWS region (required).
     - AWS_SSM_APP_PATH: SSM parameter path prefix (required).
-    - AWS_SSM_CACHE_FILE: path to cache file (defaults to "/tmp/keys.enc").
+    - AWS_SSM_CACHE_FILE: path to cache file (defaults to keys.enc in the system temp directory).
     - AWS_SSM_IGNORE_LOAD: "1" to skip loading cache.
     - AWS_SSM_WITH_DECRYPTION: "1" to request SSM decryption.
     - AWS_SSM_FAIL_ON_ERROR: "1" to propagate errors instead of returning an empty dict.
@@ -517,7 +519,7 @@ def get_keys_env():
     return get_keys(
         region_name=os.environ["AWS_SSM_REGION_NAME"],
         key_path=os.environ["AWS_SSM_APP_PATH"],
-        cache_file=os.environ.get("AWS_SSM_CACHE_FILE", "/tmp/keys.enc"),
+        cache_file=os.environ.get("AWS_SSM_CACHE_FILE", DEFAULT_CACHE_FILE),
         ignore_load=os.environ.get("AWS_SSM_IGNORE_LOAD") == "1",
         with_decryption=os.environ.get("AWS_SSM_WITH_DECRYPTION") == "1",
         fail_on_error=os.environ.get("AWS_SSM_FAIL_ON_ERROR") == "1",

@@ -41,7 +41,7 @@ This method will return the same information that `get_keys` but instead of aski
 ```
 AWS_SSM_REGION_NAME
 AWS_SSM_APP_PATH
-AWS_SSM_CACHE_FILE
+AWS_SSM_CACHE_FILE # default: keys.enc in the system temp directory
 
 # Optionals
 AWS_SSM_IGNORE_LOAD # default 0
